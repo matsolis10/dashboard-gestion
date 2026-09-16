@@ -19,7 +19,6 @@ def clean_currency(x):
             return 0.0
     return float(x)
 
-# El ttl=300 hace que la caché expire cada 5 minutos, forzando a leer el Excel nuevo
 @st.cache_data(ttl=300)
 def load_data():
     file_path = "Gestion de Melbet_Brazzino (1).xlsx" 
@@ -46,7 +45,6 @@ if df_melbet.empty:
 
 st.title("📊 Dashboard Directivo: Gestión de Plataformas")
 
-# Botón para forzar la actualización de datos
 if st.sidebar.button("🔄 Refrescar Datos de GitHub"):
     st.cache_data.clear()
     st.rerun()
@@ -60,7 +58,6 @@ if plataforma == "Melbet - Resumen":
     st.sidebar.markdown("---")
     st.sidebar.subheader("Filtros de Datos")
     
-    # NUEVO FILTRO DE FECHAS (Separado y más fácil)
     min_date = df_melbet['Fecha'].min()
     max_date = df_melbet['Fecha'].max()
     
@@ -74,8 +71,6 @@ if plataforma == "Melbet - Resumen":
     cliente_seleccionado = st.sidebar.multiselect("Buscar Cliente(s)", options=clientes)
 
     df_filtrado = df_melbet.copy()
-    
-    # Aplicar el nuevo filtro de fechas
     df_filtrado = df_filtrado[(df_filtrado['Fecha'] >= fecha_inicio) & (df_filtrado['Fecha'] <= fecha_fin)]
     
     if cliente_seleccionado:
@@ -128,18 +123,17 @@ if plataforma == "Melbet - Resumen":
         fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
         st.plotly_chart(fig_bar, use_container_width=True)
 
-# ---- SECCIÓN 2: MELBET KARDEX ----
+# ---- SECCIÓN 2: MELBET KARDEX ACTUALIZADO ----
 elif plataforma == "Melbet - Kardex":
-    st.header("📋 Kardex Detallado: Melbet")
+    st.header("📋 Kardex Analítico: Melbet")
     
     col_f1, col_f2, col_f3 = st.columns(3)
     
     with col_f1:
         clientes_kardex = sorted(df_melbet['Nombre'].dropna().unique())
-        filtro_cliente = st.multiselect("🔍 Cliente(s)", options=clientes_kardex)
+        filtro_cliente = st.multiselect("🔍 Buscar Cliente(s)", options=clientes_kardex)
     
     with col_f2:
-         # Fechas separadas para el Kardex también
          min_date_k = df_melbet['Fecha'].min()
          max_date_k = df_melbet['Fecha'].max()
          col_k1, col_k2 = st.columns(2)
@@ -155,21 +149,75 @@ elif plataforma == "Melbet - Kardex":
     
     if filtro_cliente:
         df_kardex = df_kardex[df_kardex['Nombre'].isin(filtro_cliente)]
-        
     df_kardex = df_kardex[(df_kardex['Fecha'] >= f_inicio_k) & (df_kardex['Fecha'] <= f_fin_k)]
-        
     if tipo_movimiento == "Solo Recargas (Ingresos)":
         df_kardex = df_kardex[df_kardex['Ingresos(Recarga)'] > 0]
     elif tipo_movimiento == "Solo Retiros (Egresos)":
         df_kardex = df_kardex[df_kardex['Egresos (Retiro)'] > 0]
-        
+
+    # --- NUEVA ZONA DE KPIs FINANCIEROS ---
+    st.markdown("---")
+    st.subheader("💡 Inteligencia Financiera (Según Filtros)")
+    
+    tot_ingresos = df_kardex['Ingresos(Recarga)'].sum()
+    tot_egresos = df_kardex['Egresos (Retiro)'].sum()
+    balance_neto = tot_ingresos - tot_egresos
+    
+    # Cálculos avanzados
+    margen_casa = ((tot_ingresos - tot_egresos) / tot_ingresos * 100) if tot_ingresos > 0 else 0
+    retorno_cliente = (tot_egresos / tot_ingresos * 100) if tot_ingresos > 0 else 0
+    
+    recs = df_kardex[df_kardex['Ingresos(Recarga)'] > 0]['Ingresos(Recarga)']
+    rets = df_kardex[df_kardex['Egresos (Retiro)'] > 0]['Egresos (Retiro)']
+    ticket_recarga = recs.mean() if not recs.empty else 0
+    ticket_retiro = rets.mean() if not rets.empty else 0
+    ratio = len(recs) / len(rets) if len(rets) > 0 else len(recs)
+
+    col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+    
+    with col_kpi1:
+        st.metric("Subtotal Balance Neto", f"Bs {balance_neto:,.2f}", f"Ingresos: Bs {tot_ingresos:,.0f} | Egresos: Bs {tot_egresos:,.0f}")
+    
+    with col_kpi2:
+        # Si el margen es negativo, significa que la casa perdió dinero
+        color_margen = "normal" if margen_casa >= 0 else "inverse"
+        st.metric("Margen Neto (Casa)", f"{margen_casa:,.1f}%", f"Retorno al cliente: {retorno_cliente:,.1f}%", delta_color=color_margen)
+
+    with col_kpi3:
+        st.metric("Ticket Promedio (Recarga)", f"Bs {ticket_recarga:,.2f}")
+    
+    with col_kpi4:
+        st.metric("Ratio de Frecuencia", f"{ratio:,.1f} a 1", "Por cada retiro, hay 'X' recargas", delta_color="off")
+
+    st.markdown("---")
+    
+    # --- PREPARACIÓN DE LA TABLA CON FILA DE TOTALES ---
+    # Ordenar los datos por fecha
+    df_mostrar = df_kardex.sort_values(by='Fecha', ascending=False).copy()
+    
+    # Convertimos Fecha y Telefono a string temporalmente para la fila total
+    df_mostrar['Fecha'] = df_mostrar['Fecha'].astype(str)
+    df_mostrar['Telefono'] = df_mostrar['Telefono'].fillna("").astype(str)
+    
+    # Crear la fila "TOTAL"
+    fila_total = pd.DataFrame({
+        'Fecha': ['TOTALES'],
+        'Nombre': [''],
+        'Telefono': [''],
+        'Ingresos(Recarga)': [tot_ingresos],
+        'Egresos (Retiro)': [tot_egresos]
+    })
+    
+    # Concatenar la fila de total al final
+    df_final = pd.concat([df_mostrar, fila_total], ignore_index=True)
+
+    # Mostrar la tabla en la app
     st.dataframe(
-        df_kardex.sort_values(by='Fecha', ascending=False),
+        df_final,
         use_container_width=True,
         column_config={
             "Ingresos(Recarga)": st.column_config.NumberColumn("Ingresos (Bs)", format="Bs %.2f"),
-            "Egresos (Retiro)": st.column_config.NumberColumn("Egresos (Bs)", format="Bs %.2f"),
-            "Fecha": st.column_config.DateColumn("Fecha")
+            "Egresos (Retiro)": st.column_config.NumberColumn("Egresos (Bs)", format="Bs %.2f")
         },
         hide_index=True
     )
@@ -194,7 +242,6 @@ elif plataforma == "Brazzino":
     cliente_seleccionado_bz = st.sidebar.multiselect("Buscar Cliente(s)", options=clientes_bz)
     
     df_filtrado_bz = df_brazzino.copy()
-    
     df_filtrado_bz = df_filtrado_bz[(df_filtrado_bz['Fecha'] >= f_inicio_bz) & (df_filtrado_bz['Fecha'] <= f_fin_bz)]
     
     if cliente_seleccionado_bz:
@@ -224,4 +271,3 @@ elif plataforma == "Brazzino":
         use_container_width=True,
         hide_index=True
     )
-    
