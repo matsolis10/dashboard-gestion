@@ -2,10 +2,8 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# Configuración de la página (¡Ahora ocupa todo el ancho!)
 st.set_page_config(page_title="Dashboard de Gestión", layout="wide", page_icon="📊")
 
-# Función para limpiar los datos de moneda (Quitar 'Bs', manejar comas y puntos)
 def clean_currency(x):
     if pd.isna(x):
         return 0.0
@@ -21,10 +19,9 @@ def clean_currency(x):
             return 0.0
     return float(x)
 
-# Cargar datos
-@st.cache_data
+# El ttl=300 hace que la caché expire cada 5 minutos, forzando a leer el Excel nuevo
+@st.cache_data(ttl=300)
 def load_data():
-    # Asegúrate de que el nombre coincide con tu archivo
     file_path = "Gestion de Melbet_Brazzino (1).xlsx" 
     try:
         df_melbet = pd.read_excel(file_path, sheet_name='Melbet')
@@ -33,12 +30,10 @@ def load_data():
         st.error(f"Error al cargar el archivo. Revisa el nombre: {e}")
         return pd.DataFrame(), pd.DataFrame()
     
-    # Limpieza Melbet
     df_melbet['Ingresos(Recarga)'] = df_melbet['Ingresos(Recarga)'].apply(clean_currency)
     df_melbet['Egresos (Retiro)'] = df_melbet['Egresos (Retiro)'].apply(clean_currency)
-    df_melbet['Fecha'] = pd.to_datetime(df_melbet['Fecha']).dt.date # Convertir a fecha pura
+    df_melbet['Fecha'] = pd.to_datetime(df_melbet['Fecha']).dt.date
     
-    # Limpieza Brazzino
     df_brazzino['Deposito'] = df_brazzino['Deposito'].apply(clean_currency)
     df_brazzino['Fecha'] = pd.to_datetime(df_brazzino['Fecha']).dt.date
     
@@ -47,38 +42,45 @@ def load_data():
 df_melbet, df_brazzino = load_data()
 
 if df_melbet.empty:
-    st.stop() # Detener si no carga el archivo
+    st.stop()
 
 st.title("📊 Dashboard Directivo: Gestión de Plataformas")
 
-# Sidebar para navegación principal
+# Botón para forzar la actualización de datos
+if st.sidebar.button("🔄 Refrescar Datos de GitHub"):
+    st.cache_data.clear()
+    st.rerun()
+
 plataforma = st.sidebar.radio("Navegación", ["Melbet - Resumen", "Melbet - Kardex", "Brazzino"])
 
 # ---- SECCIÓN 1: MELBET RESUMEN ----
 if plataforma == "Melbet - Resumen":
     st.header("📈 Resumen Ejecutivo: Melbet")
     
-    # FILTROS GLOBALES DE MELBET EN LA BARRA LATERAL
     st.sidebar.markdown("---")
     st.sidebar.subheader("Filtros de Datos")
     
-    # Filtro de Fechas
+    # NUEVO FILTRO DE FECHAS (Separado y más fácil)
     min_date = df_melbet['Fecha'].min()
     max_date = df_melbet['Fecha'].max()
-    fechas = st.sidebar.date_input("Rango de Fechas", [min_date, max_date], min_value=min_date, max_value=max_date)
     
-    # Filtro por Clientes
+    col_f_inicio, col_f_fin = st.sidebar.columns(2)
+    with col_f_inicio:
+        fecha_inicio = st.date_input("Fecha Inicio", min_date, min_value=min_date, max_value=max_date)
+    with col_f_fin:
+        fecha_fin = st.date_input("Fecha Fin", max_date, min_value=min_date, max_value=max_date)
+    
     clientes = sorted(df_melbet['Nombre'].dropna().unique())
     cliente_seleccionado = st.sidebar.multiselect("Buscar Cliente(s)", options=clientes)
 
-    # APLICAR FILTROS
     df_filtrado = df_melbet.copy()
-    if len(fechas) == 2:
-        df_filtrado = df_filtrado[(df_filtrado['Fecha'] >= fechas[0]) & (df_filtrado['Fecha'] <= fechas[1])]
+    
+    # Aplicar el nuevo filtro de fechas
+    df_filtrado = df_filtrado[(df_filtrado['Fecha'] >= fecha_inicio) & (df_filtrado['Fecha'] <= fecha_fin)]
+    
     if cliente_seleccionado:
         df_filtrado = df_filtrado[df_filtrado['Nombre'].isin(cliente_seleccionado)]
 
-    # KPIs
     st.subheader("Indicadores Clave")
     col1, col2, col3 = st.columns(3)
     total_ingresos = df_filtrado['Ingresos(Recarga)'].sum()
@@ -91,12 +93,10 @@ if plataforma == "Melbet - Resumen":
     
     st.markdown("---")
     
-    # GRÁFICOS INTERACTIVOS
     col_chart1, col_chart2 = st.columns(2)
     
     with col_chart1:
         st.subheader("Flujo Diario")
-        # Selector para ver Ingresos, Egresos o Ambos
         tipo_flujo = st.radio("Mostrar:", ["Ambos", "Solo Ingresos", "Solo Egresos"], horizontal=True)
         diario = df_filtrado.groupby('Fecha')[['Ingresos(Recarga)', 'Egresos (Retiro)']].sum().reset_index()
         
@@ -112,13 +112,12 @@ if plataforma == "Melbet - Resumen":
         st.plotly_chart(fig_line, use_container_width=True)
     
     with col_chart2:
-        st.subheader("Top 10 Clientes")
-        # Selector dinámico para el Top
+        st.subheader("Top Clientes")
         top_por = st.selectbox("Clasificar por:", ["Ingresos(Recarga)", "Egresos (Retiro)"])
         top_n = st.slider("Cantidad de clientes a mostrar:", 5, 20, 10)
         
         top_clientes = df_filtrado.groupby('Nombre')[top_por].sum().reset_index()
-        top_clientes = top_clientes[top_clientes[top_por] > 0] # Filtrar los de monto 0
+        top_clientes = top_clientes[top_clientes[top_por] > 0]
         top_clientes = top_clientes.sort_values(by=top_por, ascending=False).head(top_n)
         
         color_bar = '#00CC96' if top_por == 'Ingresos(Recarga)' else '#EF553B'
@@ -133,38 +132,37 @@ if plataforma == "Melbet - Resumen":
 elif plataforma == "Melbet - Kardex":
     st.header("📋 Kardex Detallado: Melbet")
     
-    st.markdown("Filtra y explora las transacciones individuales. Puedes exportar esta tabla si lo necesitas.")
-    
     col_f1, col_f2, col_f3 = st.columns(3)
     
-    # Filtros específicos del Kardex
     with col_f1:
         clientes_kardex = sorted(df_melbet['Nombre'].dropna().unique())
         filtro_cliente = st.multiselect("🔍 Cliente(s)", options=clientes_kardex)
     
     with col_f2:
+         # Fechas separadas para el Kardex también
          min_date_k = df_melbet['Fecha'].min()
          max_date_k = df_melbet['Fecha'].max()
-         filtro_fecha = st.date_input("📅 Fecha", [min_date_k, max_date_k], min_value=min_date_k, max_value=max_date_k)
+         col_k1, col_k2 = st.columns(2)
+         with col_k1:
+             f_inicio_k = st.date_input("Fecha Inicio", min_date_k)
+         with col_k2:
+             f_fin_k = st.date_input("Fecha Fin", max_date_k)
     
     with col_f3:
         tipo_movimiento = st.selectbox("🔄 Tipo de Movimiento", ["Todos", "Solo Recargas (Ingresos)", "Solo Retiros (Egresos)"])
         
-    # Aplicar filtros Kardex
     df_kardex = df_melbet.copy()
     
     if filtro_cliente:
         df_kardex = df_kardex[df_kardex['Nombre'].isin(filtro_cliente)]
         
-    if len(filtro_fecha) == 2:
-        df_kardex = df_kardex[(df_kardex['Fecha'] >= filtro_fecha[0]) & (df_kardex['Fecha'] <= filtro_fecha[1])]
+    df_kardex = df_kardex[(df_kardex['Fecha'] >= f_inicio_k) & (df_kardex['Fecha'] <= f_fin_k)]
         
     if tipo_movimiento == "Solo Recargas (Ingresos)":
         df_kardex = df_kardex[df_kardex['Ingresos(Recarga)'] > 0]
     elif tipo_movimiento == "Solo Retiros (Egresos)":
         df_kardex = df_kardex[df_kardex['Egresos (Retiro)'] > 0]
         
-    # Mostrar tabla (Streamlit maneja esto maravillosamente con filtros nativos extra en los headers)
     st.dataframe(
         df_kardex.sort_values(by='Fecha', ascending=False),
         use_container_width=True,
@@ -183,22 +181,25 @@ elif plataforma == "Brazzino":
     st.sidebar.markdown("---")
     st.sidebar.subheader("Filtros Brazzino")
     
-    # Filtro de Fechas Brazzino
     min_date_bz = df_brazzino['Fecha'].min()
     max_date_bz = df_brazzino['Fecha'].max()
-    fechas_bz = st.sidebar.date_input("Rango de Fechas", [min_date_bz, max_date_bz], min_value=min_date_bz, max_value=max_date_bz)
     
-    # Filtro por Clientes Brazzino
+    col_bz1, col_bz2 = st.sidebar.columns(2)
+    with col_bz1:
+        f_inicio_bz = st.date_input("Inicio", min_date_bz)
+    with col_bz2:
+        f_fin_bz = st.date_input("Fin", max_date_bz)
+    
     clientes_bz = sorted(df_brazzino['Nombre'].dropna().unique())
     cliente_seleccionado_bz = st.sidebar.multiselect("Buscar Cliente(s)", options=clientes_bz)
     
     df_filtrado_bz = df_brazzino.copy()
-    if len(fechas_bz) == 2:
-        df_filtrado_bz = df_filtrado_bz[(df_filtrado_bz['Fecha'] >= fechas_bz[0]) & (df_filtrado_bz['Fecha'] <= fechas_bz[1])]
+    
+    df_filtrado_bz = df_filtrado_bz[(df_filtrado_bz['Fecha'] >= f_inicio_bz) & (df_filtrado_bz['Fecha'] <= f_fin_bz)]
+    
     if cliente_seleccionado_bz:
         df_filtrado_bz = df_filtrado_bz[df_filtrado_bz['Nombre'].isin(cliente_seleccionado_bz)]
 
-    # KPIs Brazzino
     total_depositos = df_filtrado_bz['Deposito'].sum()
     st.metric("Total Depósitos (Periodo Seleccionado)", f"Bs {total_depositos:,.2f}")
     
@@ -223,3 +224,4 @@ elif plataforma == "Brazzino":
         use_container_width=True,
         hide_index=True
     )
+    
