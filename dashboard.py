@@ -29,12 +29,35 @@ def load_data():
         st.error(f"Error al cargar el archivo. Revisa el nombre: {e}")
         return pd.DataFrame(), pd.DataFrame()
     
+    # 1. Limpieza de montos base
     df_melbet['Ingresos(Recarga)'] = df_melbet['Ingresos(Recarga)'].apply(clean_currency)
     df_melbet['Egresos (Retiro)'] = df_melbet['Egresos (Retiro)'].apply(clean_currency)
-    df_melbet['Fecha'] = pd.to_datetime(df_melbet['Fecha']).dt.date
     
+    # 2. NUEVO: Lógica del "Bono Alejandro" (+50% en recargas)
+    # Buscamos dinámicamente si existe una columna que contenga la palabra "alejandro"
+    col_alejandro = [c for c in df_melbet.columns if 'alejandro' in str(c).lower()]
+    
+    # (Por seguridad) Si el Excel la cargó sin nombre en la 6ta columna
+    if not col_alejandro and 'Unnamed: 5' in df_melbet.columns:
+        col_alejandro = ['Unnamed: 5']
+
+    if col_alejandro:
+        nombre_col = col_alejandro[0]
+        # Identificamos las filas donde esa columna NO esté vacía
+        filtro_bono = df_melbet[nombre_col].notna() & (df_melbet[nombre_col] != '')
+        # Multiplicamos el ingreso por 1.5 (el 100% original + 50% de bono extra)
+        df_melbet.loc[filtro_bono, 'Ingresos(Recarga)'] = df_melbet.loc[filtro_bono, 'Ingresos(Recarga)'] * 1.5
+
+    # 3. SOLUCIÓN AL ERROR DE FECHAS
+    # errors='coerce' fuerza a que los textos inválidos o celdas raras se ignoren y no tumben la página
+    df_melbet['Fecha'] = pd.to_datetime(df_melbet['Fecha'], errors='coerce').dt.date
+    # Eliminamos silenciosamente las filas que quedaron sin una fecha válida
+    df_melbet = df_melbet.dropna(subset=['Fecha'])
+    
+    # Limpieza Brazzino
     df_brazzino['Deposito'] = df_brazzino['Deposito'].apply(clean_currency)
-    df_brazzino['Fecha'] = pd.to_datetime(df_brazzino['Fecha']).dt.date
+    df_brazzino['Fecha'] = pd.to_datetime(df_brazzino['Fecha'], errors='coerce').dt.date
+    df_brazzino = df_brazzino.dropna(subset=['Fecha'])
     
     return df_melbet, df_brazzino
 
@@ -123,7 +146,7 @@ if plataforma == "Melbet - Resumen":
         fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
         st.plotly_chart(fig_bar, use_container_width=True)
 
-# ---- SECCIÓN 2: MELBET KARDEX ACTUALIZADO ----
+# ---- SECCIÓN 2: MELBET KARDEX ----
 elif plataforma == "Melbet - Kardex":
     st.header("📋 Kardex Analítico: Melbet")
     
@@ -155,7 +178,6 @@ elif plataforma == "Melbet - Kardex":
     elif tipo_movimiento == "Solo Retiros (Egresos)":
         df_kardex = df_kardex[df_kardex['Egresos (Retiro)'] > 0]
 
-    # --- NUEVA ZONA DE KPIs FINANCIEROS ---
     st.markdown("---")
     st.subheader("💡 Inteligencia Financiera (Según Filtros)")
     
@@ -163,7 +185,6 @@ elif plataforma == "Melbet - Kardex":
     tot_egresos = df_kardex['Egresos (Retiro)'].sum()
     balance_neto = tot_ingresos - tot_egresos
     
-    # Cálculos avanzados
     margen_casa = ((tot_ingresos - tot_egresos) / tot_ingresos * 100) if tot_ingresos > 0 else 0
     retorno_cliente = (tot_egresos / tot_ingresos * 100) if tot_ingresos > 0 else 0
     
@@ -179,7 +200,6 @@ elif plataforma == "Melbet - Kardex":
         st.metric("Subtotal Balance Neto", f"Bs {balance_neto:,.2f}", f"Ingresos: Bs {tot_ingresos:,.0f} | Egresos: Bs {tot_egresos:,.0f}")
     
     with col_kpi2:
-        # Si el margen es negativo, significa que la casa perdió dinero
         color_margen = "normal" if margen_casa >= 0 else "inverse"
         st.metric("Margen Neto (Casa)", f"{margen_casa:,.1f}%", f"Retorno al cliente: {retorno_cliente:,.1f}%", delta_color=color_margen)
 
@@ -191,15 +211,11 @@ elif plataforma == "Melbet - Kardex":
 
     st.markdown("---")
     
-    # --- PREPARACIÓN DE LA TABLA CON FILA DE TOTALES ---
-    # Ordenar los datos por fecha
     df_mostrar = df_kardex.sort_values(by='Fecha', ascending=False).copy()
     
-    # Convertimos Fecha y Telefono a string temporalmente para la fila total
     df_mostrar['Fecha'] = df_mostrar['Fecha'].astype(str)
     df_mostrar['Telefono'] = df_mostrar['Telefono'].fillna("").astype(str)
     
-    # Crear la fila "TOTAL"
     fila_total = pd.DataFrame({
         'Fecha': ['TOTALES'],
         'Nombre': [''],
@@ -208,10 +224,8 @@ elif plataforma == "Melbet - Kardex":
         'Egresos (Retiro)': [tot_egresos]
     })
     
-    # Concatenar la fila de total al final
     df_final = pd.concat([df_mostrar, fila_total], ignore_index=True)
 
-    # Mostrar la tabla en la app
     st.dataframe(
         df_final,
         use_container_width=True,
