@@ -29,32 +29,24 @@ def load_data():
         st.error(f"Error al cargar el archivo. Revisa el nombre: {e}")
         return pd.DataFrame(), pd.DataFrame()
     
-    # 1. Limpieza de montos base
+    # 1. Limpieza de montos
     df_melbet['Ingresos(Recarga)'] = df_melbet['Ingresos(Recarga)'].apply(clean_currency)
     df_melbet['Egresos (Retiro)'] = df_melbet['Egresos (Retiro)'].apply(clean_currency)
     
-    # 2. NUEVO: Lógica del "Bono Alejandro" (+50% en recargas)
-    # Buscamos dinámicamente si existe una columna que contenga la palabra "alejandro"
-    col_alejandro = [c for c in df_melbet.columns if 'alejandro' in str(c).lower()]
-    
-    # (Por seguridad) Si el Excel la cargó sin nombre en la 6ta columna
-    if not col_alejandro and 'Unnamed: 5' in df_melbet.columns:
-        col_alejandro = ['Unnamed: 5']
+    # 2. Arreglar la columna "Unnamed: 5" para que sea un clasificador
+    if 'Unnamed: 5' in df_melbet.columns:
+        # Renombramos la columna para que se vea bien en el Kardex
+        df_melbet = df_melbet.rename(columns={'Unnamed: 5': 'Bono Alejandro'})
+        # Todo lo que tenga valor ahí (como el 0.5) lo marcamos como "Sí", si está vacío como "No"
+        df_melbet['Bono Alejandro'] = df_melbet['Bono Alejandro'].apply(lambda x: "Sí" if pd.notna(x) and str(x).strip() != '' else "No")
+    else:
+        # Por si algún día borras esa columna del Excel, que no se rompa el código
+        df_melbet['Bono Alejandro'] = "No"
 
-    if col_alejandro:
-        nombre_col = col_alejandro[0]
-        # Identificamos las filas donde esa columna NO esté vacía
-        filtro_bono = df_melbet[nombre_col].notna() & (df_melbet[nombre_col] != '')
-        # Multiplicamos el ingreso por 1.5 (el 100% original + 50% de bono extra)
-        df_melbet.loc[filtro_bono, 'Ingresos(Recarga)'] = df_melbet.loc[filtro_bono, 'Ingresos(Recarga)'] * 1.5
-
-    # 3. SOLUCIÓN AL ERROR DE FECHAS
-    # errors='coerce' fuerza a que los textos inválidos o celdas raras se ignoren y no tumben la página
+    # 3. Limpieza de Fechas
     df_melbet['Fecha'] = pd.to_datetime(df_melbet['Fecha'], errors='coerce').dt.date
-    # Eliminamos silenciosamente las filas que quedaron sin una fecha válida
     df_melbet = df_melbet.dropna(subset=['Fecha'])
     
-    # Limpieza Brazzino
     df_brazzino['Deposito'] = df_brazzino['Deposito'].apply(clean_currency)
     df_brazzino['Fecha'] = pd.to_datetime(df_brazzino['Fecha'], errors='coerce').dt.date
     df_brazzino = df_brazzino.dropna(subset=['Fecha'])
@@ -90,14 +82,26 @@ if plataforma == "Melbet - Resumen":
     with col_f_fin:
         fecha_fin = st.date_input("Fecha Fin", max_date, min_value=min_date, max_value=max_date)
     
+    # NUEVO FILTRO EN SIDEBAR: Origen de Recarga
+    tipo_origen = st.sidebar.selectbox(
+        "Origen de Recarga", 
+        ["Todas", "Solo Recargas Alejandro (Bono)", "Solo Recargas Normales"]
+    )
+    
     clientes = sorted(df_melbet['Nombre'].dropna().unique())
     cliente_seleccionado = st.sidebar.multiselect("Buscar Cliente(s)", options=clientes)
 
+    # APLICAR FILTROS
     df_filtrado = df_melbet.copy()
     df_filtrado = df_filtrado[(df_filtrado['Fecha'] >= fecha_inicio) & (df_filtrado['Fecha'] <= fecha_fin)]
     
     if cliente_seleccionado:
         df_filtrado = df_filtrado[df_filtrado['Nombre'].isin(cliente_seleccionado)]
+        
+    if tipo_origen == "Solo Recargas Alejandro (Bono)":
+        df_filtrado = df_filtrado[df_filtrado['Bono Alejandro'] == "Sí"]
+    elif tipo_origen == "Solo Recargas Normales":
+        df_filtrado = df_filtrado[df_filtrado['Bono Alejandro'] == "No"]
 
     st.subheader("Indicadores Clave")
     col1, col2, col3 = st.columns(3)
@@ -150,7 +154,7 @@ if plataforma == "Melbet - Resumen":
 elif plataforma == "Melbet - Kardex":
     st.header("📋 Kardex Analítico: Melbet")
     
-    col_f1, col_f2, col_f3 = st.columns(3)
+    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
     
     with col_f1:
         clientes_kardex = sorted(df_melbet['Nombre'].dropna().unique())
@@ -161,22 +165,33 @@ elif plataforma == "Melbet - Kardex":
          max_date_k = df_melbet['Fecha'].max()
          col_k1, col_k2 = st.columns(2)
          with col_k1:
-             f_inicio_k = st.date_input("Fecha Inicio", min_date_k)
+             f_inicio_k = st.date_input("Inicio", min_date_k)
          with col_k2:
-             f_fin_k = st.date_input("Fecha Fin", max_date_k)
+             f_fin_k = st.date_input("Fin", max_date_k)
     
     with col_f3:
-        tipo_movimiento = st.selectbox("🔄 Tipo de Movimiento", ["Todos", "Solo Recargas (Ingresos)", "Solo Retiros (Egresos)"])
+        tipo_movimiento = st.selectbox("🔄 Tipo Movimiento", ["Todos", "Solo Recargas (Ingresos)", "Solo Retiros (Egresos)"])
         
+    with col_f4:
+        # NUEVO FILTRO EN KARDEX: Origen de Recarga
+        origen_kardex = st.selectbox("🎯 Origen Recarga", ["Todas", "Solo Alejandro (Bono)", "Normales"])
+        
+    # APLICAR FILTROS KARDEX
     df_kardex = df_melbet.copy()
     
     if filtro_cliente:
         df_kardex = df_kardex[df_kardex['Nombre'].isin(filtro_cliente)]
     df_kardex = df_kardex[(df_kardex['Fecha'] >= f_inicio_k) & (df_kardex['Fecha'] <= f_fin_k)]
+    
     if tipo_movimiento == "Solo Recargas (Ingresos)":
         df_kardex = df_kardex[df_kardex['Ingresos(Recarga)'] > 0]
     elif tipo_movimiento == "Solo Retiros (Egresos)":
         df_kardex = df_kardex[df_kardex['Egresos (Retiro)'] > 0]
+        
+    if origen_kardex == "Solo Alejandro (Bono)":
+        df_kardex = df_kardex[df_kardex['Bono Alejandro'] == "Sí"]
+    elif origen_kardex == "Normales":
+        df_kardex = df_kardex[df_kardex['Bono Alejandro'] == "No"]
 
     st.markdown("---")
     st.subheader("💡 Inteligencia Financiera (Según Filtros)")
@@ -211,17 +226,19 @@ elif plataforma == "Melbet - Kardex":
 
     st.markdown("---")
     
+    # Preparar tabla para mostrar
     df_mostrar = df_kardex.sort_values(by='Fecha', ascending=False).copy()
-    
     df_mostrar['Fecha'] = df_mostrar['Fecha'].astype(str)
     df_mostrar['Telefono'] = df_mostrar['Telefono'].fillna("").astype(str)
     
+    # Crear fila de totales (dejamos la columna Bono Alejandro vacía en el total para que no ensucie)
     fila_total = pd.DataFrame({
         'Fecha': ['TOTALES'],
         'Nombre': [''],
         'Telefono': [''],
         'Ingresos(Recarga)': [tot_ingresos],
-        'Egresos (Retiro)': [tot_egresos]
+        'Egresos (Retiro)': [tot_egresos],
+        'Bono Alejandro': ['']
     })
     
     df_final = pd.concat([df_mostrar, fila_total], ignore_index=True)
@@ -231,7 +248,8 @@ elif plataforma == "Melbet - Kardex":
         use_container_width=True,
         column_config={
             "Ingresos(Recarga)": st.column_config.NumberColumn("Ingresos (Bs)", format="Bs %.2f"),
-            "Egresos (Retiro)": st.column_config.NumberColumn("Egresos (Bs)", format="Bs %.2f")
+            "Egresos (Retiro)": st.column_config.NumberColumn("Egresos (Bs)", format="Bs %.2f"),
+            "Bono Alejandro": st.column_config.TextColumn("Bono Alejandro")
         },
         hide_index=True
     )
